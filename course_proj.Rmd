@@ -5,17 +5,11 @@ date: "February 14, 2015"
 output: html_document
 ---
 
-source: http://groupware.les.inf.puc-rio.br/har
+data source: http://groupware.les.inf.puc-rio.br/har
 
 ##Overview
-some text for overview
-
-+ belt 
-+ forearm
-+ arm
-+ dumbell 
-
-+ 6 participant
+In this document I create models which predict the manner in which people did the exercise. In training set we have 19622 observation for 6 individuals data which have 159 variables. I dropped all variables contains NA values and fit some models (simple tree model, random forest and GBM) once then from variable importance I implement enhanced feature selected model for random forest and GBM. Our final best performing model got 99.08% (random forest with variable selection) acculacy in my out of sample accuracy.
+  
 
 ###Loading and preparing data
 ```{r}
@@ -56,7 +50,7 @@ plus `user_name`, times (`raw_timestamp_part1`, `raw_time_stamp_part_2`, `cvtd_t
 ### Data cleaning
 
 ####drop columns contains NA values
-We drop all variables contain NA values. This process drop 100 variables but we have enough samples (19622 samples) and still have 59 variables. We have to back if we can't make good model with 59 variables.
+I will drop all variables contain NA values. This process wil drop 100 variables but we have enough samples (19622 samples) and still have 59 variables. I have to back if I can't make good model with 59 variables.
 
 ```{r}
 train_df <- train_df[, names(train_df)[sapply(names(train_df), function(x) { !any(is.na(train_df[,x])) })]]
@@ -83,17 +77,12 @@ train_df$user_eurico <- (train_df$user_name=="eurico") * 1
 train_df$user_jeremy <- (train_df$user_name=="jeremy") * 1
 # all 0 is pedro
 
-test_df$user_adel <- (test_df$user_name=="adelmo") * 1
-test_df$user_carl <- (test_df$user_name=="carlitos") * 1
-test_df$user_charles <- (test_df$user_name=="charles") * 1
-test_df$user_eurico <- (test_df$user_name=="eurico") * 1
-test_df$user_jeremy <- (test_df$user_name=="jeremy") * 1
-
 ```
 
 
 
 ###Exploratory analysis
+Performed some basic exploratory analysis.
 
 ####Correlation of each variables
 ```{r fig.height=8, fig.width=8}
@@ -112,9 +101,6 @@ g <- ggplot(train_df, aes(classe, roll_belt))
 p <- g + geom_boxplot(aes(fill=classe)) + facet_grid(. ~ user_name)
 p
 
-g <- ggplot(train_df, aes(roll_belt, roll_arm))
-p <- g + geom_point(aes(colour=(classe))) + facet_grid(. ~ user_name)
-p
 ```
 
 ##Training
@@ -126,7 +112,7 @@ registerDoMC(cores=2) # this is setting for my pc with dual core cpu
 ```
 
 ###Split data into training set and testing set
-I know its not standard way but we got so many samples so we only use 5% of samples as training set and we test against 95% of samples
+I know its not standard to use just 10% of data as training set but I got so many samples and it takes a lot of times to train 60% of data as training set. As we will see later we have enough to have 10% of data as training set to get satisfactory perfomance.
 
 
 ```{r}
@@ -136,17 +122,30 @@ inTrain <- createDataPartition(y=train_df$classe, p=.1, list=FALSE)
 training <- train_df[inTrain,];testing <- train_df[-inTrain,]
 ```
 
+
+```{r}
+fitControl <- trainControl(## 10-fold CV
+                           method="repeatedCV",
+                           number=10,
+                           ## repeated 10 times
+                           repeats=5)
+```
+
 ###Simple tree model
+First I will try simple tree model.
+
 ```{r, cache=FALSE}
 # this takes a quite while
 set.seed(123)
-system.time(modFit <- train(classe ~., method='rpart', data=training))
+system.time(modFit <- train(classe ~., method='rpart', 
+                            data=training))
 confusionMatrix(predict(modFit, training), training$classe)
 confusionMatrix(predict(modFit, testing), testing$classe)
 ```
 
 ###Random forest 
-Basic simple random forest model
+Basic simple random forest model.
+
 ```{r, cache=FALSE}
 set.seed(123)
 system.time(modRf <- train(classe ~., method='rf', data=training))
@@ -156,7 +155,7 @@ confusionMatrix(predict(modRf, testing), testing$classe)
 
 
 ###Random forest enhanced with variable selection
-We will try to enhance our random forest model by selecting variables. To select variables we use variable importance from random forestmodel we just created.
+I will try to enhance our random forest model by selecting variables. To select variables I will use variable importance from random forest model we just created.
 
 
 ```{r cache=FALSE}
@@ -185,69 +184,42 @@ system.time(modRf3 <- train(classe ~ raw_timestamp_part_1 + roll_belt + pitch_fo
 confusionMatrix(predict(modRf3, training), training$classe)
 confusionMatrix(predict(modRf3, testing), testing$classe)
 ```
-###GBM
 
-```{r, cache=TRUE,eval=FALSE}
+It seems adding user variables are not improving model performance.
+
+---
+
+###GBM
+Now I will try GBM.
+First, I start with simple GBM.
+
+```{r, cache=TRUE}
 set.seed(123)
 system.time(modGbm <- train(classe ~., method='gbm', data=training, verbose=FALSE))
 confusionMatrix(predict(modGbm, training), na.omit(training)$classe)
 confusionMatrix(predict(modGbm, testing), na.omit(testing)$classe)
 ```
 
-###Fine tuning
-We tried tree model, random forest and GBM and we see random forest and GBM are worth to dig deeper.
+###Fine tuning with train control
 
-####Train control
-```{r, cache=TRUE, eval=FALSE}
+```{r, cache=TRUE}
 fitControl <- trainControl(## 10-fold CV
                            method="repeatedCV",
                            number=10,
                            ## repeated 10 times
                            repeats=3)
-set.seed(123)
-system.time(modRf2 <- train(classe ~., data=training, method='rf', trControl=fitControl))
-modRf2
-confusionMatrix(predict(modRf2, training), na.omit(training)$classe)
-confusionMatrix(predict(modRf2, testing), na.omit(testing)$classe)
 
 set.seed(123)
 system.time(modGbm2 <- train(classe ~., data=training, method='gbm', verbose=FALSE, trControl=fitControl))
 modGbm2
-confusionMatrix(predict(modGbm2, training), na.omit(training)$classe)
-confusionMatrix(predict(modGbm2, testing), na.omit(testing)$classe)
+confusionMatrix(predict(modGbm2, training), training$classe)
+confusionMatrix(predict(modGbm2, testing), testing$classe)
 ```
 
-
-###Selecting variable in random forest
-```{r, cache=TRUE, eval=FALSE}
-
-rfFitControl <- trainControl(## 10-fold CV
-                           method="repeatedCV",
-                           number=10,
-                           repeats=5)
-
-set.seed(123)
-#    user  system elapsed 
-# 235.402   3.346 242.222 
-
-system.time(modRf2 <- train(classe ~., method='rf', 
-                            data=training,
-                            importance=TRUE,
-                            trControl=rfFitControl))
-vi <- varImp(modRf2)
-
-set.seed(123)
-system.time(modRf3 <- train(classe ~ stddev_roll_belt + avg_roll_dumbbell + raw_timestamp_part_1 + user_adel + user_carl + user_charles + user_eurico + user_jeremy, method='rf', 
-                            data=training,
-                            importance=TRUE,
-                            trControl=rfFitControl))
-
-confusionMatrix(predict(modRf3, na.omit(testing)), na.omit(testing)$classe)
-```
 
 
 ###Selecting variables in GBM
-```{r eval=FALSE, cache=TRUE}
+```{r cache=TRUE}
 
 set.seed(123)
 #    user  system elapsed 
@@ -258,10 +230,10 @@ vi <- varImp(modGbm2)
 vi
 
 set.seed(123)
-system.time(modGbmS <- train(classe ~ avg_roll_dumbbell + stddev_roll_belt +  raw_timestamp_part_1 + user_adel + user_carl + user_charles + user_eurico + user_jeremy, method='gbm',
+system.time(modGbmS <- train(classe ~ raw_timestamp_part_1 + roll_belt, method='gbm',
                             data=training,
                             verbose=FALSE,
-                            trControl=rfFitControl))
+                            trControl=fitControl))
 
 confusionMatrix(predict(modGbmS, na.omit(testing)), na.omit(testing)$classe)
 ```
@@ -270,25 +242,22 @@ confusionMatrix(predict(modGbmS, na.omit(testing)), na.omit(testing)$classe)
 ####Enhance GBM with grid
 http://topepo.github.io/caret/training.html
 
-```{r, eval=FALSE}
+```{r, cache=TRUE}
 gbmGrid <- expand.grid(interaction.depth = c(3,5,7),
                        n.trees = (1:5) * 50,
                        shrinkage = .1)
 
 set.seed(123)
-
-# gbmGrid <- expand.grid(interaction.depth = c(1,5,9),
-                        # n.trees = (1:30) * 50,
-                        # shrinkage = .1)
-#     user   system  elapsed 
-# 2909.468    9.007 2930.066 
-set.seed(123)
-system.time(modGbmS_enh <- train(classe ~ avg_roll_dumbbell + stddev_roll_belt +  raw_timestamp_part_1 + user_adel + user_carl + user_charles + user_eurico + user_jeremy, method='gbm',
+system.time(modGbmS_enh <- train(classe ~ raw_timestamp_part_1 + roll_belt, method='gbm',
                             data=training,
                             verbose=FALSE,
-                            trControl=rfFitControl,
+                            trControl=fitControl,
                             tuneGrid=gbmGrid))
 modGbmS_enh
 ggplot(modGbmS_enh)
-confusionMatrix(predict(modGbmS_enh, testing), na.omit(testing)$classe)
+confusionMatrix(predict(modGbmS_enh, testing), testing$classe)
 ```
+
+
+##Conclusion
+I created several models (simple tree model, random forest, random forest with variables selection, GBM, GBM with train control, GBM with variables selection) and found random forest and GBM are both very accurate in out of sample accuracy. Even very simple random forest and GBM got 98% accuracy and enhanced version (with variables selection) improved their performance.
