@@ -1,0 +1,294 @@
+---
+title: 'Practical Machine Learning: Course Project'
+author: "Yasuyuki Ageishi"
+date: "February 14, 2015"
+output: html_document
+---
+
+source: http://groupware.les.inf.puc-rio.br/har
+
+##Overview
+some text for overview
+
++ belt 
++ forearm
++ arm
++ dumbell 
+
++ 6 participant
+
+###Loading and preparing data
+```{r}
+train_data_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+
+test_data_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+## download data
+if (!file.exists("./data/pml-training.csv")) {
+  download.file(train_data_url, "./data/pml-training.csv", method="curl")
+}
+if (!file.exists("./data/pml-testing.csv")) {
+  download.file(test_data_url, "./data/pml-testing.csv", method="curl")
+}
+
+## reading data
+train_df <- read.csv("data/pml-training.csv", header=TRUE, row.names="X", na.strings=c("", " ", "NA", "#DIV/0!"))
+test_df <- read.csv("data/pml-testing.csv", header=TRUE, row.names="X", na.strings=c(""," ", "NA", "#DIV/0!"))
+
+library(dplyr)
+
+```
+
+| | rows | cols 
+| --- | --- | ---
+| train | 19622 | 159
+| test | 20 | 159
+
+159 features
+4 positions (*belt*, *arm*, *dumbbell*, *forearm*) * 38 measurements = 152
+
+```{r, cache=TRUE}
+sapply(names(train_df)[sapply(names(train_df), function(x) { grepl("forearm",x)})], function(x) { gsub('_forearm', '', x)})
+```
+plus `user_name`, times (`raw_timestamp_part1`, `raw_time_stamp_part_2`, `cvtd_timestamp`, `new_window`, `num_window`) and `classe
+
+
+### Data cleaning
+
+####drop columns contains NA values
+We drop all variables contain NA values. This process drop 100 variables but we have enough samples (19622 samples) and still have 59 variables. We have to back if we can't make good model with 59 variables.
+
+```{r}
+train_df <- train_df[, names(train_df)[sapply(names(train_df), function(x) { !any(is.na(train_df[,x])) })]]
+test_df <- test_df[, names(test_df)[sapply(names(test_df), function(x) { !any(is.na(test_df[,x]))})]]
+dim(train_df); dim(test_df)
+```
+
+####we don't need cvtd_timestamp since we have raw_timestamp_part_1
+
+```{r}
+train_df <- select(train_df, -(cvtd_timestamp))
+test_df <- select(test_df, -(cvtd_timestamp))
+```
+
+
+####user_name to each user 
+Create binary variables for each users.
+
+```{r}
+train_df$user_adel <- (train_df$user_name=="adelmo") * 1
+train_df$user_carl <- (train_df$user_name=="carlitos") * 1
+train_df$user_charles <- (train_df$user_name=="charles") * 1
+train_df$user_eurico <- (train_df$user_name=="eurico") * 1
+train_df$user_jeremy <- (train_df$user_name=="jeremy") * 1
+# all 0 is pedro
+
+test_df$user_adel <- (test_df$user_name=="adelmo") * 1
+test_df$user_carl <- (test_df$user_name=="carlitos") * 1
+test_df$user_charles <- (test_df$user_name=="charles") * 1
+test_df$user_eurico <- (test_df$user_name=="eurico") * 1
+test_df$user_jeremy <- (test_df$user_name=="jeremy") * 1
+
+```
+
+
+
+###Exploratory analysis
+
+####Correlation of each variables
+```{r fig.height=8, fig.width=8}
+library(corrplot)
+corrplot(cor(select(train_df, (roll_belt:magnet_forearm_z))))
+```
+
+####Variables are very vary for each users
+```{r}
+library(ggplot2)
+g <- ggplot(train_df, aes(classe, roll_forearm))
+p <- g + geom_boxplot(aes(fill=classe)) + facet_grid(. ~ user_name)
+p
+
+g <- ggplot(train_df, aes(classe, roll_belt))
+p <- g + geom_boxplot(aes(fill=classe)) + facet_grid(. ~ user_name)
+p
+
+g <- ggplot(train_df, aes(roll_belt, roll_arm))
+p <- g + geom_point(aes(colour=(classe))) + facet_grid(. ~ user_name)
+p
+```
+
+##Training
+
+### Prepare for parallel backend
+```{r}
+library(doMC)
+registerDoMC(cores=2) # this is setting for my pc with dual core cpu
+```
+
+###Split data into training set and testing set
+I know its not standard way but we got so many samples so we only use 5% of samples as training set and we test against 95% of samples
+
+
+```{r}
+library(caret)
+set.seed(999)
+inTrain <- createDataPartition(y=train_df$classe, p=.1, list=FALSE)
+training <- train_df[inTrain,];testing <- train_df[-inTrain,]
+```
+
+###Simple tree model
+```{r, cache=FALSE}
+# this takes a quite while
+set.seed(123)
+system.time(modFit <- train(classe ~., method='rpart', data=training))
+confusionMatrix(predict(modFit, training), training$classe)
+confusionMatrix(predict(modFit, testing), testing$classe)
+```
+
+###Random forest 
+Basic simple random forest model
+```{r, cache=FALSE}
+set.seed(123)
+system.time(modRf <- train(classe ~., method='rf', data=training))
+confusionMatrix(predict(modRf, training), training$classe)
+confusionMatrix(predict(modRf, testing), testing$classe)
+```
+
+
+###Random forest enhanced with variable selection
+We will try to enhance our random forest model by selecting variables. To select variables we use variable importance from random forestmodel we just created.
+
+
+```{r cache=FALSE}
+vi <- varImp(modRf)
+vi
+```
+
+From variable importance, we choose `raw_timestamp_part_1`, `roll_belt` and `pitch_forearm`.
+
+
+```{r cache=FALSE}
+set.seed(123)
+system.time(modRf2 <- train(classe ~ raw_timestamp_part_1 + roll_belt + pitch_forearm, method='rf',
+                           data=training))
+confusionMatrix(predict(modRf2, training), training$classe)
+confusionMatrix(predict(modRf2, testing), testing$classe)
+```
+
+####Adding users variables to enhanced random forest
+Let's try to add users variable since we know that variables are very vary from user to user.
+
+```{r cache=FALSE}
+set.seed(123)
+system.time(modRf3 <- train(classe ~ raw_timestamp_part_1 + roll_belt + pitch_forearm + user_adel + user_carl + user_charles + user_eurico + user_jeremy, method='rf',
+                           data=training))
+confusionMatrix(predict(modRf3, training), training$classe)
+confusionMatrix(predict(modRf3, testing), testing$classe)
+```
+###GBM
+
+```{r, cache=TRUE,eval=FALSE}
+set.seed(123)
+system.time(modGbm <- train(classe ~., method='gbm', data=training, verbose=FALSE))
+confusionMatrix(predict(modGbm, training), na.omit(training)$classe)
+confusionMatrix(predict(modGbm, testing), na.omit(testing)$classe)
+```
+
+###Fine tuning
+We tried tree model, random forest and GBM and we see random forest and GBM are worth to dig deeper.
+
+####Train control
+```{r, cache=TRUE, eval=FALSE}
+fitControl <- trainControl(## 10-fold CV
+                           method="repeatedCV",
+                           number=10,
+                           ## repeated 10 times
+                           repeats=3)
+set.seed(123)
+system.time(modRf2 <- train(classe ~., data=training, method='rf', trControl=fitControl))
+modRf2
+confusionMatrix(predict(modRf2, training), na.omit(training)$classe)
+confusionMatrix(predict(modRf2, testing), na.omit(testing)$classe)
+
+set.seed(123)
+system.time(modGbm2 <- train(classe ~., data=training, method='gbm', verbose=FALSE, trControl=fitControl))
+modGbm2
+confusionMatrix(predict(modGbm2, training), na.omit(training)$classe)
+confusionMatrix(predict(modGbm2, testing), na.omit(testing)$classe)
+```
+
+
+###Selecting variable in random forest
+```{r, cache=TRUE, eval=FALSE}
+
+rfFitControl <- trainControl(## 10-fold CV
+                           method="repeatedCV",
+                           number=10,
+                           repeats=5)
+
+set.seed(123)
+#    user  system elapsed 
+# 235.402   3.346 242.222 
+
+system.time(modRf2 <- train(classe ~., method='rf', 
+                            data=training,
+                            importance=TRUE,
+                            trControl=rfFitControl))
+vi <- varImp(modRf2)
+
+set.seed(123)
+system.time(modRf3 <- train(classe ~ stddev_roll_belt + avg_roll_dumbbell + raw_timestamp_part_1 + user_adel + user_carl + user_charles + user_eurico + user_jeremy, method='rf', 
+                            data=training,
+                            importance=TRUE,
+                            trControl=rfFitControl))
+
+confusionMatrix(predict(modRf3, na.omit(testing)), na.omit(testing)$classe)
+```
+
+
+###Selecting variables in GBM
+```{r eval=FALSE, cache=TRUE}
+
+set.seed(123)
+#    user  system elapsed 
+# 235.402   3.346 242.222 
+
+
+vi <- varImp(modGbm2)
+vi
+
+set.seed(123)
+system.time(modGbmS <- train(classe ~ avg_roll_dumbbell + stddev_roll_belt +  raw_timestamp_part_1 + user_adel + user_carl + user_charles + user_eurico + user_jeremy, method='gbm',
+                            data=training,
+                            verbose=FALSE,
+                            trControl=rfFitControl))
+
+confusionMatrix(predict(modGbmS, na.omit(testing)), na.omit(testing)$classe)
+```
+
+
+####Enhance GBM with grid
+http://topepo.github.io/caret/training.html
+
+```{r, eval=FALSE}
+gbmGrid <- expand.grid(interaction.depth = c(3,5,7),
+                       n.trees = (1:5) * 50,
+                       shrinkage = .1)
+
+set.seed(123)
+
+# gbmGrid <- expand.grid(interaction.depth = c(1,5,9),
+                        # n.trees = (1:30) * 50,
+                        # shrinkage = .1)
+#     user   system  elapsed 
+# 2909.468    9.007 2930.066 
+set.seed(123)
+system.time(modGbmS_enh <- train(classe ~ avg_roll_dumbbell + stddev_roll_belt +  raw_timestamp_part_1 + user_adel + user_carl + user_charles + user_eurico + user_jeremy, method='gbm',
+                            data=training,
+                            verbose=FALSE,
+                            trControl=rfFitControl,
+                            tuneGrid=gbmGrid))
+modGbmS_enh
+ggplot(modGbmS_enh)
+confusionMatrix(predict(modGbmS_enh, testing), na.omit(testing)$classe)
+```
